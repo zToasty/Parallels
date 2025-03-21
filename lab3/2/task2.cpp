@@ -131,7 +131,6 @@ private:
     bool is_two_args;
 };
 
-// Пример использования
 int main() {
     Server<double> server;
     server.start();
