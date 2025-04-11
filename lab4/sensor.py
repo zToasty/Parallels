@@ -7,12 +7,12 @@ import logging
 import os
 import sys
 
-# Logging setup
 log_dir = "log"
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
+
 logging.basicConfig(filename=os.path.join(log_dir, "sensor_log.log"),
-                    level=logging.ERROR,
+                    level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(message)s")
 
 
@@ -46,7 +46,7 @@ class SensorCam(Sensor):
             self.cap.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
         except Exception as e:
             logging.error(f"Fatal error: Camera initialization failed - {e}")
-            sys.exit(1)  # Exit on fatal error
+            sys.exit(1)
 
     def get(self):
         """Retrieve a frame from the camera"""
@@ -89,28 +89,11 @@ def sensor_worker(sensor, data_queue):
         try:
             value = sensor.get()
             if data_queue.full():
-                data_queue.get()  # Remove oldest value
+                data_queue.get()
             data_queue.put(value)
         except Exception as e:
             logging.error(f"Sensor error: {e}")
-            time.sleep(1)  # Prevent CPU overload
-
-
-def camera_worker(camera, frame_queue, stop_event):
-    """Thread for capturing camera frames"""
-    while not stop_event.is_set():
-        try:
-            frame = camera.get()
-            if frame is None:
-                logging.error("Camera frame is None, possible disconnection")
-                stop_event.set()  # Signal to stop
-                return
-            if frame_queue.full():
-                frame_queue.get()
-            frame_queue.put(frame)
-        except Exception as e:
-            logging.error(f"Fatal camera worker error: {e}")
-            stop_event.set()  # Signal to stop
+            time.sleep(1)
 
 
 def cleanup(camera, sensors, window):
@@ -123,6 +106,21 @@ def cleanup(camera, sensors, window):
     if window:
         window.release()
 
+def camera_worker(camera, frame_queue, stop_event):
+    """Thread for capturing camera frames"""
+    while not stop_event.is_set():
+        try:
+            frame = camera.get()
+            if frame is None:
+                logging.error("Camera frame is None, possible disconnection")
+                stop_event.set()
+                return
+            if frame_queue.full():
+                frame_queue.get()
+            frame_queue.put(frame)
+        except Exception as e:
+            logging.error(f"Fatal camera worker error: {e}")
+            stop_event.set()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -142,34 +140,33 @@ if __name__ == "__main__":
         frame_queue = queue.Queue(maxsize=2)
         sensor_queues = [queue.Queue(maxsize=2) for _ in sensors]
 
-        # Start sensor threads
+        # Sensor threads
         for sensor, sensor_queue in zip(sensors, sensor_queues):
             threading.Thread(target=sensor_worker, args=(sensor, sensor_queue), daemon=True).start()
 
-        # Start camera thread
+        # Camera thread
         cam_thread = threading.Thread(target=camera_worker, args=(camera, frame_queue, stop_event), daemon=True)
         cam_thread.start()
 
         window = WindowImage(args.fps)
 
-        # FPS synchronization using time
+        # FPS sync
         prev_time = time.time()
 
         while not stop_event.is_set():
             current_time = time.time()
             elapsed_time = current_time - prev_time
 
-            # Ensure time for sensor data retrieval
+            
             if elapsed_time >= (1 / args.fps):
                 prev_time = current_time
 
                 try:
-                    frame = frame_queue.get_nowait()  # Get last frame
+                    frame = frame_queue.get_nowait()
                 except queue.Empty:
                     frame = None
 
                 if frame is not None:
-                    # Overlay sensor data on frame
                     for i, sensor_queue in enumerate(sensor_queues):
                         try:
                             sensor_value = sensor_queue.get_nowait()
@@ -179,10 +176,10 @@ if __name__ == "__main__":
                                    cv.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
                     if not window.show(frame):
-                        stop_event.set()  # Exit on 'q' press
+                        logging.info("KeyboardInterrupt: Exiting program")
+                        stop_event.set()
                         break
             else:
-                # Allow time for sensor data to be read before next frame
                 time.sleep(0.001)
 
     except KeyboardInterrupt:
@@ -193,4 +190,5 @@ if __name__ == "__main__":
         logging.error(f"Unexpected error: {e}")
     finally:
         cleanup(camera, sensors, window)
+        logging.info("Program exited successfully.")
         sys.exit(0)
